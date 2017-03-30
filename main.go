@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/codegangsta/envy/lib"
-	"github.com/codegangsta/gin/lib"
+	"github.com/Cosebe/gin/lib"
 	shellwords "github.com/mattn/go-shellwords"
 	"gopkg.in/urfave/cli.v1"
 
@@ -54,9 +54,9 @@ func main() {
 			Value: "gin-bin",
 			Usage: "name of generated binary file",
 		},
-		cli.StringFlag{
+		cli.StringSliceFlag{
 			Name:  "path,t",
-			Value: ".",
+			Value: &cli.StringSlice{},
 			Usage: "Path to watch files from",
 		},
 		cli.StringFlag{
@@ -139,7 +139,7 @@ func MainAction(c *cli.Context) {
 
 	buildPath := c.GlobalString("build")
 	if buildPath == "" {
-		buildPath = c.GlobalString("path")
+		buildPath = "."
 	}
 	builder := gin.NewBuilder(buildPath, c.GlobalString("bin"), c.GlobalBool("godep"), wd, buildArgs)
 	runner := gin.NewRunner(filepath.Join(wd, builder.Binary()), c.Args()...)
@@ -171,7 +171,7 @@ func MainAction(c *cli.Context) {
 	build(builder, runner, logger)
 
 	// scan for changes
-	scanChanges(c.GlobalString("path"), c.GlobalStringSlice("excludeDir"), all, func(path string) {
+	scanChanges(c.GlobalStringSlice("path"), c.GlobalStringSlice("excludeDir"), all, func(path string) {
 		runner.Kill()
 		build(builder, runner, logger)
 	})
@@ -212,31 +212,37 @@ func build(builder gin.Builder, runner gin.Runner, logger *log.Logger) {
 
 type scanCallback func(path string)
 
-func scanChanges(watchPath string, excludeDirs []string, allFiles bool, cb scanCallback) {
+func scanChanges(watchPaths []string, excludeDirs []string, allFiles bool, cb scanCallback) {
 	for {
-		filepath.Walk(watchPath, func(path string, info os.FileInfo, err error) error {
-			if path == ".git" && info.IsDir(){
-				return filepath.SkipDir
-			}
-			for _, x := range excludeDirs {
-				if x == path {
+		for _, watchPath := range watchPaths {
+			filepath.Walk(watchPath, func(path string, info os.FileInfo, err error) error {
+				if path == ".git" && info.IsDir(){
 					return filepath.SkipDir
 				}
-			}
+				for _, x := range excludeDirs {
+					if x == path {
+						return filepath.SkipDir
+					}
+				}
 
-			// ignore hidden files
-			if filepath.Base(path)[0] == '.' {
+				if filepath.Ext(path) == ".DS_Store" {
+					return nil
+				}
+
+				// ignore hidden files
+				if filepath.Base(path)[0] == '.' {
+					return nil
+				}
+
+				if (allFiles || filepath.Ext(path) == ".go") && info.ModTime().After(startTime) {
+					cb(path)
+					startTime = time.Now()
+					return errors.New("done")
+				}
+
 				return nil
-			}
-
-			if (allFiles || filepath.Ext(path) == ".go") && info.ModTime().After(startTime) {
-				cb(path)
-				startTime = time.Now()
-				return errors.New("done")
-			}
-
-			return nil
-		})
+			})
+		}
 		time.Sleep(500 * time.Millisecond)
 	}
 }
